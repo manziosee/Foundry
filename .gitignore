@@ -1,0 +1,30 @@
+# Binaries
+imgstore
+imgstore.exe
+manager
+manager.exe
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Storage directories
+store/
+test-image.tar
+
+# Go
+go.sum
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
