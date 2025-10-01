@@ -8,25 +8,31 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"net/http"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"imgstore/internal/cache"
+	"imgstore/internal/downloader"
 	"imgstore/internal/fsm"
 	"imgstore/internal/storage"
 )
 
 type Service struct {
-	db      *sql.DB
-	storage *storage.OverlayStorage
+	db         *sql.DB
+	storage    *storage.OverlayStorage
+	downloader *downloader.Downloader
+	cache      *cache.BlobCache
 }
 
 func NewService(db *sql.DB, root string) *Service {
 	return &Service{
-		db:      db,
-		storage: storage.NewOverlayStorage(root),
+		db:         db,
+		storage:    storage.NewOverlayStorage(root),
+		downloader: downloader.New(),
+		cache:      cache.NewBlobCache(db, root),
 	}
 }
 
@@ -86,7 +92,10 @@ func (s *Service) executeTransition(ctx context.Context, id int, name, blobKey, 
 	case fsm.StateDownloading:
 		return nil // Just mark as downloading
 	case fsm.StateDownloaded:
-		return s.downloadBlob(ctx, blobKey, checksum)
+		if err := s.downloadBlob(ctx, blobKey, checksum); err != nil {
+			return err
+		}
+		return s.cache.MarkUsed(checksum, id)
 	case fsm.StateUnpacking:
 		return nil // Just mark as unpacking
 	case fsm.StateUnpacked:
@@ -102,38 +111,24 @@ func (s *Service) executeTransition(ctx context.Context, id int, name, blobKey, 
 }
 
 func (s *Service) downloadBlob(ctx context.Context, blobURL, expectedChecksum string) error {
-	blobPath := s.storage.GetBlobPath(expectedChecksum)
+	blobPath := s.cache.GetPath(expectedChecksum)
 	
-	// Check if already exists
-	if _, err := os.Stat(blobPath); err == nil {
-		return s.verifyChecksum(blobPath, expectedChecksum)
+	// Check cache first
+	if s.cache.Exists(expectedChecksum) {
+		log.Printf("Blob %s already cached", expectedChecksum[:12])
+		return nil
 	}
 
-	// Download
-	resp, err := http.Get(blobURL)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	tmpPath := blobPath + ".tmp"
-	file, err := os.Create(tmpPath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	if _, err := io.Copy(file, resp.Body); err != nil {
-		os.Remove(tmpPath)
-		return err
+	// Download with progress
+	log.Printf("Downloading blob %s...", expectedChecksum[:12])
+	progress := func(downloaded, total int64) {
+		if total > 0 {
+			percent := float64(downloaded) / float64(total) * 100
+			log.Printf("Progress: %.1f%% (%d/%d bytes)", percent, downloaded, total)
+		}
 	}
 
-	if err := s.verifyChecksum(tmpPath, expectedChecksum); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-
-	return os.Rename(tmpPath, blobPath)
+	return s.downloader.Download(ctx, blobURL, blobPath, expectedChecksum, progress)
 }
 
 func (s *Service) verifyChecksum(path, expected string) error {
