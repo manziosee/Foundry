@@ -170,3 +170,40 @@ func (s *Service) GetImageStatus(name string) (string, error) {
 	err := s.db.QueryRow("SELECT state FROM images WHERE name=?", name).Scan(&state)
 	return state, err
 }
+
+func (s *Service) GetAllImages() ([]ImageInfo, error) {
+	rows, err := s.db.Query("SELECT id, name, blob_key, checksum, state, created_at, updated_at FROM images")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var images []ImageInfo
+	for rows.Next() {
+		var img ImageInfo
+		if err := rows.Scan(&img.ID, &img.Name, &img.BlobKey, &img.Checksum, &img.State, &img.Created, &img.Updated); err != nil {
+			continue
+		}
+		images = append(images, img)
+	}
+	return images, nil
+}
+
+func (s *Service) RemoveImage(name string) error {
+	_, err := s.db.Exec("DELETE FROM images WHERE name=?", name)
+	return err
+}
+
+func (s *Service) Cleanup() error {
+	return s.cache.Cleanup()
+}
+
+type ImageInfo struct {
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	BlobKey  string `json:"blob_key"`
+	Checksum string `json:"checksum"`
+	State    string `json:"state"`
+	Created  string `json:"created_at"`
+	Updated  string `json:"updated_at"`
+}

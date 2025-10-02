@@ -32,6 +32,8 @@ go build -o imgstore
 ```
 
 ### Basic Usage
+
+#### CLI Mode
 ```bash
 # Start worker daemon
 ./imgstore worker &
@@ -44,6 +46,18 @@ go build -o imgstore
 
 # Cleanup unused blobs
 ./imgstore cleanup
+```
+
+#### API Server Mode
+```bash
+# Start API server (includes background worker)
+./server --addr :8080
+
+# Use REST API
+curl http://localhost:8080/api/v1/status
+curl -X POST http://localhost:8080/api/v1/images \
+  -H "Content-Type: application/json" \
+  -d '{"name":"myimage","url":"http://example.com/image.tar","checksum":"<sha256>"}'
 ```
 
 ## Complete Example
@@ -86,10 +100,20 @@ npx http-server -p 8000
 
 ### Project Structure
 ```
-├── cmd/manager/              # CLI manager with daemon mode
-│   ├── main.go              # CLI entry point
-│   └── cleanup.go           # Blob cleanup functionality
+├── cmd/
+│   ├── manager/             # CLI manager with daemon mode
+│   │   ├── main.go          # CLI entry point
+│   │   └── cleanup.go       # Blob cleanup functionality
+│   └── server/              # REST API server
+│       ├── main.go          # HTTP server entry point
+│       └── service.go       # Service implementation
 ├── internal/
+│   ├── api/                 # REST API components
+│   │   ├── server.go        # HTTP server setup
+│   │   ├── handlers/        # HTTP request handlers
+│   │   │   └── handlers.go  # API endpoint implementations
+│   │   └── middleware/      # HTTP middleware
+│   │       └── middleware.go # CORS and logging
 │   ├── fsm/                 # Finite State Machine
 │   │   └── fsm.go          # State definitions and transitions
 │   ├── storage/             # Storage backends
@@ -98,8 +122,10 @@ npx http-server -p 8000
 │   │   └── downloader.go   # Retry logic and progress tracking
 │   ├── extractor/           # Secure tar extraction
 │   │   └── extractor.go    # Security-hardened extraction
-│   └── cache/               # Blob caching system
-│       └── cache.go        # Deduplication and cleanup
+│   ├── cache/               # Blob caching system
+│   │   └── cache.go        # Deduplication and cleanup
+│   └── types/               # Shared type definitions
+│       └── types.go        # Common data structures
 ├── migrations/              # Database schema
 │   └── 001_init.sql        # Initial SQLite schema
 ├── scripts/                 # Utilities and testing
@@ -198,6 +224,31 @@ FAILED ←──┴────────────┴───────�
 ./manager cleanup
 ```
 
+### REST API Server
+```bash
+# Start API server with background worker
+./server --addr :8080 --db ./store.db --store ./store
+
+# API endpoints
+curl http://localhost:8080/api/v1/status
+curl http://localhost:8080/api/v1/images
+curl -X POST http://localhost:8080/api/v1/images \
+  -H "Content-Type: application/json" \
+  -d '{"name":"myimage","url":"http://example.com/image.tar","checksum":"abc123"}'
+curl -X DELETE http://localhost:8080/api/v1/images/myimage
+curl -X POST http://localhost:8080/api/v1/cleanup
+```
+
+#### API Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/images` | List all images |
+| POST | `/api/v1/images` | Create new image |
+| GET | `/api/v1/images/{name}` | Get image status |
+| DELETE | `/api/v1/images/{name}` | Remove image |
+| GET | `/api/v1/status` | System health check |
+| POST | `/api/v1/cleanup` | Cleanup unused blobs |
+
 ## Development
 
 ### Requirements
@@ -207,13 +258,17 @@ FAILED ←──┴────────────┴───────�
 
 ### Building
 ```bash
-# Development build
+# CLI application
 go build -o imgstore
+
+# API server
+go build -o server cmd/server/*.go
 
 # Cross-platform builds
 GOOS=linux GOARCH=amd64 go build -o imgstore-linux
+GOOS=linux GOARCH=amd64 go build -o server-linux cmd/server/*.go
 GOOS=windows GOARCH=amd64 go build -o imgstore.exe
-GOOS=darwin GOARCH=amd64 go build -o imgstore-darwin
+GOOS=windows GOARCH=amd64 go build -o server.exe cmd/server/*.go
 ```
 
 ### Testing
@@ -267,11 +322,13 @@ sudo systemctl start imgstore-worker
 - [x] Blob caching and deduplication
 - [x] Overlayfs storage backend
 - [x] CLI interface and daemon mode
+- [x] REST API endpoints
+- [x] HTTP server with graceful shutdown
 
 ### In Progress 🚧
 - [ ] DeviceMapper thin-pool backend
-- [ ] REST API endpoints
 - [ ] Web dashboard interface
+- [ ] WebSocket real-time updates
 
 ### Planned 📋
 - [ ] Image signing and verification
@@ -303,4 +360,4 @@ MIT License - see LICENSE file for details.
 
 - **Issues**: GitHub Issues for bug reports
 - **Discussions**: GitHub Discussions for questions
-- **Security**: Email security@example.com for vulnerabilities
+- **Security**: Email manziosee3@gmail.com for vulnerabilities
