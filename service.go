@@ -1,8 +1,6 @@
 package main
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -10,12 +8,11 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"imgstore/internal/cache"
 	"imgstore/internal/downloader"
+	"imgstore/internal/extractor"
 	"imgstore/internal/fsm"
 	"imgstore/internal/storage"
 )
@@ -25,6 +22,7 @@ type Service struct {
 	storage    *storage.OverlayStorage
 	downloader *downloader.Downloader
 	cache      *cache.BlobCache
+	extractor  *extractor.Extractor
 }
 
 func NewService(db *sql.DB, root string) *Service {
@@ -33,6 +31,7 @@ func NewService(db *sql.DB, root string) *Service {
 		storage:    storage.NewOverlayStorage(root),
 		downloader: downloader.New(),
 		cache:      cache.NewBlobCache(db, root),
+		extractor:  extractor.New(),
 	}
 }
 
@@ -151,59 +150,15 @@ func (s *Service) verifyChecksum(path, expected string) error {
 }
 
 func (s *Service) unpackBlob(checksum, imageName string) error {
-	blobPath := s.storage.GetBlobPath(checksum)
+	blobPath := s.cache.GetPath(checksum)
 	imagePath := s.storage.GetImagePath(imageName)
 
 	if err := os.MkdirAll(imagePath, 0755); err != nil {
 		return err
 	}
 
-	file, err := os.Open(blobPath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	var reader io.Reader = file
-	if strings.HasSuffix(blobPath, ".tar.gz") || strings.HasSuffix(blobPath, ".tgz") {
-		gzReader, err := gzip.NewReader(file)
-		if err != nil {
-			return err
-		}
-		defer gzReader.Close()
-		reader = gzReader
-	}
-
-	tarReader := tar.NewReader(reader)
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-
-		target := filepath.Join(imagePath, header.Name)
-		if !strings.HasPrefix(target, imagePath) {
-			continue // Prevent path traversal
-		}
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			os.MkdirAll(target, os.FileMode(header.Mode))
-		case tar.TypeReg:
-			os.MkdirAll(filepath.Dir(target), 0755)
-			outFile, err := os.Create(target)
-			if err != nil {
-				return err
-			}
-			io.Copy(outFile, tarReader)
-			outFile.Close()
-			os.Chmod(target, os.FileMode(header.Mode))
-		}
-	}
-	return nil
+	log.Printf("Extracting blob %s to %s", checksum[:12], imageName)
+	return s.extractor.Extract(blobPath, imagePath)
 }
 
 func (s *Service) setState(id int, state fsm.State) {
